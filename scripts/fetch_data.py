@@ -112,6 +112,75 @@ def fetch_nikkei_vi():
     return fetch_yahoo("^NKVI")
 
 
+def fetch_touraku():
+    """東証の25日騰落レシオを (dates, values) で返す(日付昇順)。
+    nikkei225jp.com の一覧テーブルをヘッダー行から列位置を特定してパースする。"""
+    last_err = None
+    for url in (
+        "https://nikkei225jp.com/data/touraku.php",
+        "http://nikkei225jp.com/data/touraku.php",
+    ):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
+            with urllib.request.urlopen(req, timeout=30) as res:
+                raw = res.read()
+            html = None
+            for enc in ("utf-8", "cp932", "euc-jp"):
+                try:
+                    cand = raw.decode(enc)
+                    if "騰落" in cand:
+                        html = cand
+                        break
+                except UnicodeDecodeError:
+                    continue
+            if html is None:
+                raise ValueError("decode failed / no 騰落 in page")
+
+            import re
+            rows = re.split(r"<tr[^>]*>", html)
+            date_re = re.compile(r"(20\d{2})[/\-年.](\d{1,2})[/\-月.](\d{1,2})")
+            ratio_idx = None
+            pairs = {}
+            for row in rows:
+                cells = [re.sub(r"<[^>]+>", "", c).strip().replace(",", "")
+                         for c in re.split(r"<t[dh][^>]*>", row)[1:]]
+                if not cells:
+                    continue
+                # ヘッダー行から「25日」を含むレシオ列の位置を特定
+                if ratio_idx is None:
+                    for i, c in enumerate(cells):
+                        if "25" in c and ("レシオ" in c or "騰落" in c):
+                            ratio_idx = i
+                            break
+                m = date_re.search(cells[0]) or date_re.search(row)
+                if not m:
+                    continue
+                date = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+                val = None
+                if ratio_idx is not None and ratio_idx < len(cells):
+                    try:
+                        v = float(cells[ratio_idx])
+                        if 20 <= v <= 400:
+                            val = v
+                    except ValueError:
+                        pass
+                if val is None:
+                    # フォールバック: 行内で小数点付き・20〜400 の最後の数値をレシオとみなす
+                    decs = [float(x) for x in re.findall(r"\b(\d{2,3}\.\d{1,2})\b", " ".join(cells))
+                            if 20 <= float(x) <= 400]
+                    if decs:
+                        val = decs[-1]
+                if val is not None:
+                    pairs[date] = val
+            if len(pairs) < 20:
+                raise ValueError(f"parsed only {len(pairs)} rows")
+            dates = sorted(pairs)
+            return dates, [pairs[d] for d in dates]
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    raise RuntimeError(f"touraku fetch failed: {last_err}")
+
+
 def fetch_cnn():
     # CNN はボット対策で 418 を返すことがあるため、ブラウザ相当のヘッダーを付ける
     return http_get_json(CNN_URL, headers={
@@ -231,17 +300,7 @@ VOL_NKVI = {
 }
 
 
-def score_signal(asset, vol_value, vol_spec, fg_score, pc_value, pc_kind):
-    components = []
-
-    # --- 市場全体の恐怖 (最大50点) ---
-    pts, _ = band(vol_value, vol_spec["bands"])
-    components.append({
-        "key": vol_spec["key"], "label": vol_spec["label"], "points": pts, "max": 20,
-        "value": vol_value, "unit": "", "group": "market",
-        "desc": vol_spec["desc"],
-    })
-
+def comp_fear_greed(fg_score):
     if fg_score is None:
         fg_pts = 0
     elif fg_score >= 45:
@@ -252,12 +311,14 @@ def score_signal(asset, vol_value, vol_spec, fg_score, pc_value, pc_kind):
         fg_pts = 11
     else:
         fg_pts = 15
-    components.append({
+    return {
         "key": "fear_greed", "label": "Fear & Greed指数", "points": fg_pts, "max": 15,
         "value": fg_score, "unit": "", "group": "market",
         "desc": "45以上:0点 / 25-45 / 10-25 / 10未満(極度の恐怖)で最大",
-    })
+    }
 
+
+def comp_put_call(pc_value, pc_kind):
     if pc_value is None:
         pc_pts = 0
     elif pc_kind == "ratio":
@@ -278,13 +339,48 @@ def score_signal(asset, vol_value, vol_spec, fg_score, pc_value, pc_kind):
             pc_pts = 10
         else:
             pc_pts = 15
-    components.append({
+    return {
         "key": "put_call", "label": "プットコールレシオ", "points": pc_pts, "max": 15,
         "value": pc_value, "unit": "", "group": "market",
         "desc": "0.9未満:0点 / 0.9-1.0 / 1.0-1.2 / 1.2以上(弱気の極み)で最大"
         if pc_kind == "ratio" else
         "50以上:0点 / 30-50 / 15-30 / 15未満(弱気の極み)で最大",
+    }
+
+
+def comp_touraku(value):
+    """東証の25日騰落レシオ(低い=売られすぎ=買い場)。日経平均用に30点満点。"""
+    if value is None:
+        pts = 0
+    elif value >= 85:
+        pts = 0
+    elif value >= 75:
+        pts = 8
+    elif value >= 70:
+        pts = 15
+    elif value >= 60:
+        pts = 24
+    else:
+        pts = 30
+    return {
+        "key": "touraku", "label": "騰落レシオ(25日)", "points": pts, "max": 30,
+        "value": value, "unit": "%", "group": "market",
+        "desc": "85以上:0点 / 75-85 / 70-75 / 60-70 / 60未満(歴史的底値圏)で最大",
+    }
+
+
+def score_signal(asset, vol_value, vol_spec, market_extra):
+    """market_extra: 恐怖指数以外の市場センチメント部品(合計30点)のリスト。"""
+    components = []
+
+    # --- 市場全体の恐怖 (最大50点 = 恐怖指数20点 + market_extra 30点) ---
+    pts, _ = band(vol_value, vol_spec["bands"])
+    components.append({
+        "key": vol_spec["key"], "label": vol_spec["label"], "points": pts, "max": 20,
+        "value": vol_value, "unit": "", "group": "market",
+        "desc": vol_spec["desc"],
     })
+    components.extend(market_extra)
 
     # --- 資産固有の押し目 (最大50点) ---
     dd = asset["drawdown_pct"]  # 負の値
@@ -458,6 +554,8 @@ def gen_sample():
     vix = [max(11, 16 + 14 * math.exp(-((len(dates) - 1 - i) / 12) ** 2) + rng.gauss(0, 1.5))
            for i in range(len(dates))]
     nkvi = [v + 3 + rng.gauss(0, 1.0) for v in vix]
+    touraku = [max(45, min(160, 100 - (vix[i] - 16) * 2.5 + rng.gauss(0, 5)))
+               for i in range(len(dates))]
     usdjpy = walk(152, 0.0, 0.004)
     fg_hist = [max(3, min(97, 50 - (vix[i] - 16) * 3 + rng.gauss(0, 4))) for i in range(len(dates))]
     pc_hist = [max(0.55, min(1.5, 0.85 + (vix[i] - 16) * 0.02 + rng.gauss(0, 0.05)))
@@ -465,7 +563,8 @@ def gen_sample():
 
     return {
         "dates": dates, "n225": n225, "acwi": acwi, "gold": gold, "vix": vix,
-        "nkvi": nkvi, "usdjpy": usdjpy, "fg": fg_hist, "pc": pc_hist,
+        "nkvi": nkvi, "touraku": touraku,
+        "usdjpy": usdjpy, "fg": fg_hist, "pc": pc_hist,
     }
 
 
@@ -512,6 +611,10 @@ def main():
             "percentile_1y": round(percentile_rank(s["nkvi"][-252:], s["nkvi"][-1]), 1),
             "history": hist(dates, s["nkvi"]),
         }
+        market["touraku"] = {
+            "value": round(s["touraku"][-1], 1),
+            "history": hist(dates, s["touraku"]),
+        }
         market["usdjpy"] = {"value": round(s["usdjpy"][-1], 2), "history": hist(dates, s["usdjpy"])}
         assets["n225"] = build_asset("日経平均株価", "JPY", dates, s["n225"])
         assets["acwi"] = build_asset("オルカン(ACWI)", "USD", dates, s["acwi"])
@@ -542,6 +645,17 @@ def main():
         except Exception as e:  # noqa: BLE001
             errors.append(f"NikkeiVI: {e}")
             market["nikkei_vi"] = prev.get("market", {}).get("nikkei_vi")
+
+        # 東証の騰落レシオ(25日)
+        try:
+            d, v = fetch_touraku()
+            market["touraku"] = {
+                "value": round(v[-1], 1),
+                "history": hist(d, v),
+            }
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Touraku: {e}")
+            market["touraku"] = prev.get("market", {}).get("touraku")
 
         # 日経平均
         try:
@@ -629,15 +743,23 @@ def main():
     pc = market.get("put_call") or {}
     pc_val, pc_kind = pc.get("value"), pc.get("kind", "ratio")
 
+    touraku_val = (market.get("touraku") or {}).get("value")
+
     signals = {}
     if assets.get("n225"):
-        # 日経平均には日経VIを使う(取得できない場合はVIXで代替)
-        if nkvi_val is not None:
-            signals["n225"] = score_signal(assets["n225"], nkvi_val, VOL_NKVI, fg_val, pc_val, pc_kind)
+        # 日経平均: 恐怖指数は日経VI(なければVIX)、センチメントは東証の騰落レシオ
+        # (騰落レシオが取得できない場合は F&G+プットコールで代替)
+        vol_value, vol_spec = (nkvi_val, VOL_NKVI) if nkvi_val is not None else (vix_val, VOL_VIX)
+        if touraku_val is not None:
+            extra = [comp_touraku(touraku_val)]
         else:
-            signals["n225"] = score_signal(assets["n225"], vix_val, VOL_VIX, fg_val, pc_val, pc_kind)
+            extra = [comp_fear_greed(fg_val), comp_put_call(pc_val, pc_kind)]
+        signals["n225"] = score_signal(assets["n225"], vol_value, vol_spec, extra)
     if assets.get("acwi"):
-        signals["acwi"] = score_signal(assets["acwi"], vix_val, VOL_VIX, fg_val, pc_val, pc_kind)
+        signals["acwi"] = score_signal(
+            assets["acwi"], vix_val, VOL_VIX,
+            [comp_fear_greed(fg_val), comp_put_call(pc_val, pc_kind)],
+        )
     if assets.get("gold"):
         signals["gold"] = score_signal_gold(assets["gold"])
 

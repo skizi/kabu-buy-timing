@@ -302,6 +302,32 @@
       el.appendChild(d);
     }
 
+    // 騰落レシオ(25日)
+    const tr = data.market?.touraku;
+    if (tr) {
+      const el = card("騰落レシオ(25日・東証)", "値上がり銘柄数÷値下がり銘柄数(25日合計)。低いほど売られすぎ。日経平均のスコアに使用");
+      const zone = tr.value < 60 ? ["歴史的底値圏", "lv4-text"] : tr.value < 70 ? ["売られすぎ", "lv3-text"] : tr.value < 85 ? ["やや弱気", "lv2-text"] : tr.value > 120 ? ["過熱気味", "lv1-text"] : ["平常", "lv1-text"];
+      const big = document.createElement("div");
+      big.className = "big";
+      big.innerHTML = `${fmt(tr.value, 1)}%<span class="tag ${zone[1]}">${zone[0]}</span>`;
+      el.appendChild(big);
+      scaleBar(el, {
+        min: 50, max: 150, value: tr.value,
+        segments: [
+          { from: 50, to: 60, color: segColors.strong },
+          { from: 60, to: 70, color: segColors.buy },
+          { from: 70, to: 85, color: segColors.watch },
+          { from: 85, to: 150, color: segColors.none },
+        ],
+        labels: ["50", "60", "70", "85", "150"],
+      });
+      if (tr.history?.length) lineChart(el, [{ data: tr.history, area: true }], { label: "騰落レシオの推移", refY: 70, refLabel: "70", digits: 1 });
+      const d = document.createElement("p");
+      d.className = "desc";
+      d.textContent = "東証全体の下げの広がりを測る逆張り指標。70%以下は売られすぎ、60%前後は歴史的な底値圏とされ、逆に120%超は過熱のサインです。";
+      el.appendChild(d);
+    }
+
     // VIX
     const vix = data.market?.vix;
     if (vix) {
@@ -331,7 +357,7 @@
     // Fear & Greed
     const fg = data.market?.fear_greed;
     if (fg) {
-      const el = card("Fear & Greed 指数(CNN)", "7つの市場指標を合成した投資家心理の温度計(0=極度の恐怖)");
+      const el = card("Fear & Greed 指数(CNN)", "7つの市場指標を合成した投資家心理の温度計(0=極度の恐怖)。オルカンのスコアに使用");
       const zone = fg.score < 10 ? ["極度の恐怖", "lv4-text"] : fg.score < 25 ? ["強い恐怖", "lv3-text"] : fg.score < 45 ? ["恐怖寄り", "lv2-text"] : ["中立〜強気", "lv1-text"];
       const big = document.createElement("div");
       big.className = "big";
@@ -360,7 +386,7 @@
       const isRatio = pc.kind === "ratio";
       const el = card(
         "プットコールレシオ" + (isRatio ? "" : "(スコア表示)"),
-        isRatio ? "プット(下落保険)/コール(上昇期待)の出来高比。高いほど弱気" : "CNNによる0-100スコア。低いほど弱気(=逆張りの買い場)"
+        (isRatio ? "プット(下落保険)/コール(上昇期待)の出来高比。高いほど弱気" : "CNNによる0-100スコア。低いほど弱気(=逆張りの買い場)") + "。オルカンのスコアに使用"
       );
       let zone;
       if (isRatio) {
@@ -461,7 +487,7 @@
         tbody.appendChild(tr);
       }
     }
-    addScheme(data.signals?.n225, "日経平均(日経VI+恐怖指標で50点+価格指標50点)");
+    addScheme(data.signals?.n225, "日経平均(日経VI 20点+騰落レシオ30点+価格指標50点)");
     addScheme(data.signals?.acwi, "オルカン(VIX+恐怖指標で50点+価格指標50点)");
     addScheme(data.signals?.gold, "金(ゴールド)— 恐怖局面で上がりやすい資産のため、価格指標のみで100点");
   }
