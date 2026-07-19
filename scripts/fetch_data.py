@@ -13,6 +13,8 @@ GitHub Actions から毎日実行される想定。個別ソースの取得失�
 """
 
 import argparse
+import csv
+import io
 import json
 import math
 import os
@@ -73,6 +75,41 @@ def fetch_yahoo(symbol, range_="2y", interval="1d"):
         except Exception as e:  # noqa: BLE001
             last_err = e
     raise RuntimeError(f"Yahoo fetch failed for {symbol}: {last_err}")
+
+
+def fetch_nikkei_vi():
+    """日経平均VI(日経恐怖指数)の日足を (dates, values) で返す。
+    日経公式の日次CSV → Yahoo Finance の順に試す。"""
+    # 1) 日経公式CSV(Shift-JIS。1列目=日付, 2列目=終値 を想定して寛容にパース)
+    for url in (
+        "https://indexes.nikkei.co.jp/nkave/historical/nikkei_stock_average_vi_daily_jp.csv",
+        "https://indexes.nikkei.co.jp/en/nkave/historical/nikkei_stock_average_vi_daily_en.csv",
+    ):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as res:
+                raw = res.read()
+            text = raw.decode("cp932", errors="replace")
+            dates, values = [], []
+            for row in csv.reader(io.StringIO(text)):
+                if len(row) < 2:
+                    continue
+                d = row[0].strip().replace("/", "-")
+                parts = d.split("-")
+                if len(parts) != 3 or not all(p.isdigit() for p in parts):
+                    continue  # ヘッダー・注記行はスキップ
+                try:
+                    v = float(row[1].replace(",", ""))
+                except ValueError:
+                    continue
+                dates.append(f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}")
+                values.append(v)
+            if len(values) >= 30:
+                return dates, values
+        except Exception:  # noqa: BLE001
+            pass
+    # 2) Yahoo Finance
+    return fetch_yahoo("^NKVI")
 
 
 def fetch_cnn():
@@ -180,15 +217,29 @@ def band(value, bands):
     return bands[-1][1], None
 
 
-def score_signal(asset, vix, fg_score, pc_value, pc_kind):
+# ボラティリティ指数の定義(資産ごとに使い分ける)
+# 日経VIはVIXより平常時の水準がやや高いため、閾値を少し上にずらしている
+VOL_VIX = {
+    "key": "vix", "label": "VIX(恐怖指数)",
+    "bands": [(20, 0), (25, 6), (30, 12), (40, 16), (math.inf, 20)],
+    "desc": "20未満:平常 / 20-25 / 25-30 / 30-40 / 40以上で最大",
+}
+VOL_NKVI = {
+    "key": "nikkei_vi", "label": "日経平均VI(日経恐怖指数)",
+    "bands": [(22, 0), (27, 6), (32, 12), (42, 16), (math.inf, 20)],
+    "desc": "22未満:平常 / 22-27 / 27-32 / 32-42 / 42以上で最大",
+}
+
+
+def score_signal(asset, vol_value, vol_spec, fg_score, pc_value, pc_kind):
     components = []
 
     # --- 市場全体の恐怖 (最大50点) ---
-    pts, _ = band(vix, [(20, 0), (25, 6), (30, 12), (40, 16), (math.inf, 20)])
+    pts, _ = band(vol_value, vol_spec["bands"])
     components.append({
-        "key": "vix", "label": "VIX(恐怖指数)", "points": pts, "max": 20,
-        "value": vix, "unit": "", "group": "market",
-        "desc": "20未満:平常 / 20-25 / 25-30 / 30-40 / 40以上で最大",
+        "key": vol_spec["key"], "label": vol_spec["label"], "points": pts, "max": 20,
+        "value": vol_value, "unit": "", "group": "market",
+        "desc": vol_spec["desc"],
     })
 
     if fg_score is None:
@@ -406,6 +457,7 @@ def gen_sample():
         gold[-i] *= 1 - 0.003 * (31 - i)
     vix = [max(11, 16 + 14 * math.exp(-((len(dates) - 1 - i) / 12) ** 2) + rng.gauss(0, 1.5))
            for i in range(len(dates))]
+    nkvi = [v + 3 + rng.gauss(0, 1.0) for v in vix]
     usdjpy = walk(152, 0.0, 0.004)
     fg_hist = [max(3, min(97, 50 - (vix[i] - 16) * 3 + rng.gauss(0, 4))) for i in range(len(dates))]
     pc_hist = [max(0.55, min(1.5, 0.85 + (vix[i] - 16) * 0.02 + rng.gauss(0, 0.05)))
@@ -413,7 +465,7 @@ def gen_sample():
 
     return {
         "dates": dates, "n225": n225, "acwi": acwi, "gold": gold, "vix": vix,
-        "usdjpy": usdjpy, "fg": fg_hist, "pc": pc_hist,
+        "nkvi": nkvi, "usdjpy": usdjpy, "fg": fg_hist, "pc": pc_hist,
     }
 
 
@@ -455,6 +507,11 @@ def main():
             "kind": "ratio",
             "history": hist(dates, s["pc"]),
         }
+        market["nikkei_vi"] = {
+            "value": round(s["nkvi"][-1], 2),
+            "percentile_1y": round(percentile_rank(s["nkvi"][-252:], s["nkvi"][-1]), 1),
+            "history": hist(dates, s["nkvi"]),
+        }
         market["usdjpy"] = {"value": round(s["usdjpy"][-1], 2), "history": hist(dates, s["usdjpy"])}
         assets["n225"] = build_asset("日経平均株価", "JPY", dates, s["n225"])
         assets["acwi"] = build_asset("オルカン(ACWI)", "USD", dates, s["acwi"])
@@ -473,6 +530,18 @@ def main():
         except Exception as e:  # noqa: BLE001
             errors.append(f"VIX: {e}")
             market["vix"] = prev.get("market", {}).get("vix")
+
+        # 日経平均VI(日経恐怖指数)
+        try:
+            d, v = fetch_nikkei_vi()
+            market["nikkei_vi"] = {
+                "value": round(v[-1], 2),
+                "percentile_1y": round(percentile_rank(v[-252:], v[-1]), 1),
+                "history": hist(d, v),
+            }
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"NikkeiVI: {e}")
+            market["nikkei_vi"] = prev.get("market", {}).get("nikkei_vi")
 
         # 日経平均
         try:
@@ -555,14 +624,20 @@ def main():
 
     # シグナル計算
     vix_val = (market.get("vix") or {}).get("value")
+    nkvi_val = (market.get("nikkei_vi") or {}).get("value")
     fg_val = (market.get("fear_greed") or {}).get("score")
     pc = market.get("put_call") or {}
     pc_val, pc_kind = pc.get("value"), pc.get("kind", "ratio")
 
     signals = {}
-    for key in ("n225", "acwi"):
-        if assets.get(key):
-            signals[key] = score_signal(assets[key], vix_val, fg_val, pc_val, pc_kind)
+    if assets.get("n225"):
+        # 日経平均には日経VIを使う(取得できない場合はVIXで代替)
+        if nkvi_val is not None:
+            signals["n225"] = score_signal(assets["n225"], nkvi_val, VOL_NKVI, fg_val, pc_val, pc_kind)
+        else:
+            signals["n225"] = score_signal(assets["n225"], vix_val, VOL_VIX, fg_val, pc_val, pc_kind)
+    if assets.get("acwi"):
+        signals["acwi"] = score_signal(assets["acwi"], vix_val, VOL_VIX, fg_val, pc_val, pc_kind)
     if assets.get("gold"):
         signals["gold"] = score_signal_gold(assets["gold"])
 

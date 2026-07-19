@@ -276,10 +276,36 @@
       return el;
     }
 
+    // 日経平均VI
+    const nkvi = data.market?.nikkei_vi;
+    if (nkvi) {
+      const el = card("日経平均VI(日経恐怖指数)", "日経225オプションから算出される日本市場の警戒度。日経平均のスコアに使用");
+      const zone = nkvi.value >= 32 ? ["絶好水準", "lv4-text"] : nkvi.value >= 27 ? ["買い場水準", "lv3-text"] : nkvi.value >= 22 ? ["警戒", "lv2-text"] : ["平常", "lv1-text"];
+      const big = document.createElement("div");
+      big.className = "big";
+      big.innerHTML = `${fmt(nkvi.value)}<span class="tag ${zone[1]}">${zone[0]}</span>`;
+      el.appendChild(big);
+      scaleBar(el, {
+        min: 10, max: 50, value: nkvi.value,
+        segments: [
+          { from: 10, to: 22, color: segColors.none },
+          { from: 22, to: 27, color: segColors.watch },
+          { from: 27, to: 32, color: segColors.buy },
+          { from: 32, to: 50, color: segColors.strong },
+        ],
+        labels: ["10", "22", "27", "32", "50"],
+      });
+      if (nkvi.history?.length) lineChart(el, [{ data: nkvi.history, area: true }], { label: "日経平均VIの推移", refY: 32, refLabel: "32", digits: 1 });
+      const d = document.createElement("p");
+      d.className = "desc";
+      d.textContent = `直近1年の中で高い方から数えて上位 ${Math.max(1, Math.round(100 - (nkvi.percentile_1y ?? 50)))}% 以内の水準。日経VIは平常時20前後で、32を超える急落局面は日経平均の仕込み場になりやすいゾーンです。`;
+      el.appendChild(d);
+    }
+
     // VIX
     const vix = data.market?.vix;
     if (vix) {
-      const el = card("VIX(恐怖指数)", "S&P500オプションから算出される市場の警戒度");
+      const el = card("VIX(恐怖指数)", "S&P500オプションから算出される世界市場の警戒度。オルカンのスコアに使用" + (nkvi ? "" : "(日経VI取得不可時は日経平均にも使用)"));
       const big = document.createElement("div");
       big.className = "big";
       const zone = vix.value >= 30 ? ["絶好水準", "lv4-text"] : vix.value >= 25 ? ["買い場水準", "lv3-text"] : vix.value >= 20 ? ["警戒", "lv2-text"] : ["平常", "lv1-text"];
@@ -435,7 +461,8 @@
         tbody.appendChild(tr);
       }
     }
-    addScheme(data.signals?.n225 || data.signals?.acwi, "日経平均・オルカン(恐怖指標50点+価格指標50点)");
+    addScheme(data.signals?.n225, "日経平均(日経VI+恐怖指標で50点+価格指標50点)");
+    addScheme(data.signals?.acwi, "オルカン(VIX+恐怖指標で50点+価格指標50点)");
     addScheme(data.signals?.gold, "金(ゴールド)— 恐怖局面で上がりやすい資産のため、価格指標のみで100点");
   }
 })();
