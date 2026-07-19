@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: update-and-deploy
@@ -44,6 +45,15 @@ jobs:
           fi
 
       # gh-pages ブランチに同じ内容をプッシュして GitHub Pages で公開する
-      # (gh-pages ブランチの作成で Pages が自動有効化される)
       - name: Deploy to gh-pages branch
         run: git push -f origin HEAD:gh-pages
+
+      # 公開リポジトリのscheduleは非アクティブ60日で自動無効化されるため、
+      # 実行のたびに自己再有効化して無効化タイマーを予防する
+      - name: Keep scheduled workflow enabled
+        run: |
+          curl -sf -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "${{ github.api_url }}/repos/${{ github.repository }}/actions/workflows/update-data.yml/enable" \
+            || echo "enable call failed (non-fatal)"

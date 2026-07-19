@@ -90,7 +90,7 @@ def fetch_nikkei_vi():
             with urllib.request.urlopen(req, timeout=30) as res:
                 raw = res.read()
             text = raw.decode("cp932", errors="replace")
-            dates, values = [], []
+            pairs = {}
             for row in csv.reader(io.StringIO(text)):
                 if len(row) < 2:
                     continue
@@ -102,10 +102,11 @@ def fetch_nikkei_vi():
                     v = float(row[1].replace(",", ""))
                 except ValueError:
                     continue
-                dates.append(f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}")
-                values.append(v)
-            if len(values) >= 30:
-                return dates, values
+                pairs[f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"] = v
+            if len(pairs) >= 30:
+                # CSVの行順は信用せず日付でソートして最新値を確定させる
+                ds = sorted(pairs)
+                return ds, [pairs[d] for d in ds]
         except Exception:  # noqa: BLE001
             pass
     # 2) Yahoo Finance
@@ -290,17 +291,18 @@ def fetch_touraku_scrape():
 
 
 def fetch_touraku():
-    """騰落レシオ(25日)。東証公式値のスクレイプ → 日経225構成銘柄からの
-    自前計算の順に試す。(dates, values, source) を返す。"""
+    """騰落レシオ(25日)。日経225構成銘柄からの自前計算を正とする
+    (スクレイプは配信元にブロックされやすく正規表現も壊れやすいため、
+    自前計算が不能なときのみ試す)。(dates, values, source) を返す。"""
     try:
-        d, v = fetch_touraku_scrape()
-        return d, v, "tse"
-    except Exception as scrape_err:  # noqa: BLE001
+        d, v = compute_touraku_n225()
+        return d, v, "n225"
+    except Exception as calc_err:  # noqa: BLE001
         try:
-            d, v = compute_touraku_n225()
-            return d, v, "n225"
-        except Exception as calc_err:  # noqa: BLE001
-            raise RuntimeError(f"scrape: {scrape_err} / n225: {calc_err}")
+            d, v = fetch_touraku_scrape()
+            return d, v, "tse"
+        except Exception as scrape_err:  # noqa: BLE001
+            raise RuntimeError(f"n225: {calc_err} / scrape: {scrape_err}")
 
 
 def merge_history(prev_hist, new_hist, n=HISTORY_DAYS):

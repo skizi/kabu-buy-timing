@@ -43,8 +43,14 @@
       msgs.push("一部データの取得に失敗しています(前回値で代用): " + data.errors.join(" / "));
     }
     if (msgs.length) {
-      $("#banner").hidden = false;
-      $("#banner").innerHTML = msgs.map((m) => `<div>${m}</div>`).join("");
+      const banner = $("#banner");
+      banner.hidden = false;
+      banner.textContent = "";
+      for (const m of msgs) {
+        const div = document.createElement("div");
+        div.textContent = m;  // errorsは外部由来文字列を含みうるためinnerHTMLは使わない
+        banner.appendChild(div);
+      }
     }
   }
 
@@ -96,6 +102,9 @@
     const n = base.length;
     const x = (i) => padL + (i / Math.max(n - 1, 1)) * (W - padL - padR);
     const y = (v) => padT + (1 - (v - min) / (max - min)) * (H - padT - padB);
+    // 系列長が異なってもズレないよう、x座標は先頭系列の日付をキーに割り当てる
+    const dateIdx = new Map(base.map((p, i) => [p.d, i]));
+    const byDate = seriesList.map((s) => new Map(s.data.map((p) => [p.d, p.v])));
 
     const chartDiv = document.createElement("div");
     chartDiv.className = "chart";
@@ -127,10 +136,12 @@
     });
 
     for (const s of seriesList) {
-      const pts = s.data.map((p, i) => (p.v == null ? null : `${x(i)},${y(p.v)}`)).filter(Boolean);
+      const mapped = s.data.filter((p) => p.v != null && dateIdx.has(p.d));
+      if (!mapped.length) continue;
+      const pts = mapped.map((p) => `${x(dateIdx.get(p.d))},${y(p.v)}`);
       if (s.area) {
         svgEl("polygon", {
-          points: `${padL},${y(min)} ${pts.join(" ")} ${x(s.data.length - 1)},${y(min)}`,
+          points: `${x(dateIdx.get(mapped[0].d))},${y(min)} ${pts.join(" ")} ${x(dateIdx.get(mapped[mapped.length - 1].d))},${y(min)}`,
           fill: s.areaFill || "var(--series-1-soft)", stroke: "none",
         }, svg);
       }
@@ -166,8 +177,8 @@
       tip.style.top = `${(y(p.v) / H) * rect.height}px`;
       let html = `<span class="d">${p.d}</span><br><b>${fmt(p.v, opts.digits ?? 2)}</b>`;
       for (let s = 1; s < seriesList.length; s++) {
-        const q = seriesList[s].data[i];
-        if (q && q.v != null) html += ` <span class="d">${seriesList[s].name}: ${fmt(q.v, opts.digits ?? 2)}</span>`;
+        const qv = byDate[s].get(p.d);
+        if (qv != null) html += ` <span class="d">${seriesList[s].name}: ${fmt(qv, opts.digits ?? 2)}</span>`;
       }
       tip.innerHTML = html;
     }
@@ -240,7 +251,7 @@
         const note = document.createElement("p");
         note.className = "signal-action";
         note.style.cssText = "color:var(--text-muted);font-size:0.78rem;margin:2px 0 0";
-        note.textContent = "※ 金は恐怖局面で上がりやすいため、VIX等の恐怖指標は使わず価格指標のみ(100点満点)で判定";
+        note.textContent = "※ 金は恐怖局面で上がりやすいため、VIX等の恐怖指標は使わず価格指標のみ(100点満点)で判定。また金には利益・配当のような割安の基準がないため、下落率ベースの強いシグナルは株式より慎重に扱ってください";
         card.appendChild(note);
       }
       const main = $(".signal-main", card);
@@ -309,7 +320,7 @@
       const el = card(
         "騰落レシオ(25日)" + (isTse ? "・東証" : "・日経225ベース"),
         "値上がり銘柄数÷値下がり銘柄数(25日合計)。低いほど売られすぎ。日経平均のスコアに使用" +
-          (isTse ? "" : "。※東証公式値が取得できないため日経225構成銘柄から算出した近似値")
+          (isTse ? "" : "。※日経225構成銘柄から自前算出(東証プライム全銘柄の公式値とは水準が多少異なる)")
       );
       const zone = tr.value < 60 ? ["歴史的底値圏", "lv4-text"] : tr.value < 70 ? ["売られすぎ", "lv3-text"] : tr.value < 85 ? ["やや弱気", "lv2-text"] : tr.value > 120 ? ["過熱気味", "lv1-text"] : ["平常", "lv1-text"];
       const big = document.createElement("div");
