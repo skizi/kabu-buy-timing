@@ -303,6 +303,78 @@ def score_signal(asset, vix, fg_score, pc_value, pc_kind):
     }
 
 
+def score_signal_gold(asset):
+    """金は恐怖局面で上がりやすい逃避先資産のため、VIX等の恐怖指標は使わず
+    金自身の価格指標のみで100点満点を構成する。"""
+    components = []
+
+    dd = asset["drawdown_pct"]
+    depth = -dd if dd is not None else None
+    pts, _ = band(depth, [(5, 0), (10, 14), (15, 24), (20, 32), (math.inf, 40)])
+    components.append({
+        "key": "drawdown", "label": "52週高値からの下落率", "points": pts, "max": 40,
+        "value": dd, "unit": "%", "group": "asset",
+        "desc": "-5%以内:0点 / -5〜-10% / -10〜-15% / -15〜-20% / -20%超で最大",
+    })
+
+    rsi = asset["rsi14"]
+    if rsi is None:
+        rsi_pts = 0
+    elif rsi >= 45:
+        rsi_pts = 0
+    elif rsi >= 35:
+        rsi_pts = 10
+    elif rsi >= 30:
+        rsi_pts = 20
+    else:
+        rsi_pts = 30
+    components.append({
+        "key": "rsi", "label": "RSI(14日)", "points": rsi_pts, "max": 30,
+        "value": rsi, "unit": "", "group": "asset",
+        "desc": "45以上:0点 / 35-45 / 30-35 / 30未満(売られすぎ)で最大",
+    })
+
+    dev = asset["ma200_dev_pct"]
+    if dev is None:
+        dev_pts = 0
+    elif dev >= 0:
+        dev_pts = 0
+    elif dev >= -5:
+        dev_pts = 10
+    elif dev >= -10:
+        dev_pts = 20
+    else:
+        dev_pts = 30
+    components.append({
+        "key": "ma200", "label": "200日移動平均線との乖離", "points": dev_pts, "max": 30,
+        "value": dev, "unit": "%", "group": "asset",
+        "desc": "プラス:0点 / 0〜-5% / -5〜-10% / -10%超の下方乖離で最大",
+    })
+
+    score = sum(c["points"] for c in components)
+
+    if score < 20:
+        level, level_name = 1, "通常の積立のみ"
+        action = "金に割安のシグナルはありません。いつも通りの積立を続けましょう。"
+    elif score < 40:
+        level, level_name = 2, "調整の兆し・注視"
+        action = "金価格が高値から下がり始めています。買い増し資金を準備しつつ様子を見ましょう。"
+    elif score < 65:
+        level, level_name = 3, "買い増し検討"
+        action = "金価格が明確な調整に入っています。予定資金の一部(例:1/3〜1/2)での買い増しを検討できる水準です。"
+    else:
+        level, level_name = 4, "絶好の買い増しチャンス"
+        action = "金価格が深い調整局面にあります。長期の資産防衛枠として、資金を分割しつつ積極的な買い増しを検討する水準です。"
+
+    return {
+        "score": score,
+        "level": level,
+        "level_name": level_name,
+        "action": action,
+        "components": components,
+    }
+
+
 # ---------- サンプルデータ生成 ----------
 
 def gen_sample():
@@ -326,10 +398,12 @@ def gen_sample():
 
     n225 = walk(36000, 0.0004, 0.011)
     acwi = walk(105, 0.0004, 0.009)
+    gold = walk(230, 0.0005, 0.008)
     # 直近1.5ヶ月に-12%程度の調整を入れる(買い増し検討シグナルのデモ)
     for i in range(1, 31):
         n225[-i] *= 1 - 0.004 * (31 - i)
         acwi[-i] *= 1 - 0.0035 * (31 - i)
+        gold[-i] *= 1 - 0.003 * (31 - i)
     vix = [max(11, 16 + 14 * math.exp(-((len(dates) - 1 - i) / 12) ** 2) + rng.gauss(0, 1.5))
            for i in range(len(dates))]
     usdjpy = walk(152, 0.0, 0.004)
@@ -338,7 +412,7 @@ def gen_sample():
                for i in range(len(dates))]
 
     return {
-        "dates": dates, "n225": n225, "acwi": acwi, "vix": vix,
+        "dates": dates, "n225": n225, "acwi": acwi, "gold": gold, "vix": vix,
         "usdjpy": usdjpy, "fg": fg_hist, "pc": pc_hist,
     }
 
@@ -384,6 +458,7 @@ def main():
         market["usdjpy"] = {"value": round(s["usdjpy"][-1], 2), "history": hist(dates, s["usdjpy"])}
         assets["n225"] = build_asset("日経平均株価", "JPY", dates, s["n225"])
         assets["acwi"] = build_asset("オルカン(ACWI)", "USD", dates, s["acwi"])
+        assets["gold"] = build_asset("金(ゴールド/GLD)", "USD", dates, s["gold"])
         sample = True
     else:
         sample = False
@@ -414,6 +489,14 @@ def main():
         except Exception as e:  # noqa: BLE001
             errors.append(f"ACWI: {e}")
             assets["acwi"] = prev.get("assets", {}).get("acwi")
+
+        # 金 (SPDR Gold Shares ETF)
+        try:
+            d, v = fetch_yahoo("GLD")
+            assets["gold"] = build_asset("金(ゴールド/GLD)", "USD", d, v)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"GOLD: {e}")
+            assets["gold"] = prev.get("assets", {}).get("gold")
 
         # ドル円(参考表示)
         try:
@@ -480,6 +563,8 @@ def main():
     for key in ("n225", "acwi"):
         if assets.get(key):
             signals[key] = score_signal(assets[key], vix_val, fg_val, pc_val, pc_kind)
+    if assets.get("gold"):
+        signals["gold"] = score_signal_gold(assets["gold"])
 
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

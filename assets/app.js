@@ -218,7 +218,7 @@
   // ---------- 総合シグナルカード ----------
   {
     const grid = $("#signal-cards");
-    for (const key of ["n225", "acwi"]) {
+    for (const key of ["n225", "acwi", "gold"]) {
       const sig = data.signals?.[key];
       const asset = data.assets?.[key];
       if (!sig || !asset) continue;
@@ -236,6 +236,13 @@
           <summary>スコア内訳を見る</summary>
           <div class="bd-rows"></div>
         </details>`;
+      if (key === "gold") {
+        const note = document.createElement("p");
+        note.className = "signal-action";
+        note.style.cssText = "color:var(--text-muted);font-size:0.78rem;margin:2px 0 0";
+        note.textContent = "※ 金は恐怖局面で上がりやすいため、VIX等の恐怖指標は使わず価格指標のみ(100点満点)で判定";
+        card.appendChild(note);
+      }
       const main = $(".signal-main", card);
       main.appendChild(donut(sig.score, sig.level));
       const right = document.createElement("div");
@@ -368,7 +375,7 @@
     // USD/JPY(参考)
     const uj = data.market?.usdjpy;
     if (uj) {
-      const el = card("ドル円(参考・スコア対象外)", "オルカンの円建て評価額に効く為替レート");
+      const el = card("ドル円(参考・スコア対象外)", "オルカン・金(ドル建て)の円建て評価額に効く為替レート");
       const big = document.createElement("div");
       big.className = "big";
       big.innerHTML = `${fmt(uj.value)}<span style="font-size:0.9rem;color:var(--text-muted)">円/ドル</span>`;
@@ -384,7 +391,7 @@
   // ---------- 資産別詳細 ----------
   {
     const wrap = $("#asset-details");
-    for (const key of ["n225", "acwi"]) {
+    for (const key of ["n225", "acwi", "gold"]) {
       const a = data.assets?.[key];
       if (!a) continue;
       const block = document.createElement("article");
@@ -415,14 +422,20 @@
   // ---------- 判定基準テーブル ----------
   {
     const tbody = $("#criteria-table tbody");
-    const anySig = data.signals?.n225 || data.signals?.acwi;
-    if (anySig) {
-      const groups = { market: "市場全体の恐怖", asset: "資産ごとの押し目" };
-      for (const c of anySig.components) {
+    const groups = { market: "市場全体の恐怖", asset: "資産ごとの押し目" };
+
+    function addScheme(sig, heading) {
+      if (!sig) return;
+      const hr = document.createElement("tr");
+      hr.innerHTML = `<td colspan="4" style="font-weight:700;background:var(--page)">${heading}</td>`;
+      tbody.appendChild(hr);
+      for (const c of sig.components) {
         const tr = document.createElement("tr");
         tr.innerHTML = `<td>${c.label}</td><td class="grp">${groups[c.group]}</td><td>${c.max}点</td><td>${c.desc}</td>`;
         tbody.appendChild(tr);
       }
     }
+    addScheme(data.signals?.n225 || data.signals?.acwi, "日経平均・オルカン(恐怖指標50点+価格指標50点)");
+    addScheme(data.signals?.gold, "金(ゴールド)— 恐怖局面で上がりやすい資産のため、価格指標のみで100点");
   }
 })();
