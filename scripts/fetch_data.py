@@ -141,6 +141,15 @@ def compute_touraku_n225():
     adv, dec = {}, {}
     ok = 0
     codes = [c + ".T" for c in N225_CODES]
+
+    def add_series(dates_, values_):
+        for i in range(1, len(values_)):
+            if values_[i] > values_[i - 1]:
+                adv[dates_[i]] = adv.get(dates_[i], 0) + 1
+            elif values_[i] < values_[i - 1]:
+                dec[dates_[i]] = dec.get(dates_[i], 0) + 1
+
+    # 1) spark API でまとめて取得(高速だが環境によっては使えない)
     for i in range(0, len(codes), 20):
         chunk = ",".join(codes[i:i + 20])
         data = None
@@ -155,6 +164,8 @@ def compute_touraku_n225():
                 continue
         if data is None:
             continue
+        if i == 0 and not data.get("spark", {}).get("result"):
+            print(f"touraku(n225): spark unexpected response keys={list(data.keys())}")
         for r in data.get("spark", {}).get("result", []):
             try:
                 resp = r["response"][0]
@@ -162,20 +173,35 @@ def compute_touraku_n225():
                 closes = resp["indicators"]["quote"][0]["close"]
             except Exception:  # noqa: BLE001
                 continue
-            prev_c = None
+            dates_, values_ = [], []
             for t, c in zip(ts, closes):
                 if c is None:
                     continue
-                d = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
-                if prev_c is not None:
-                    if c > prev_c:
-                        adv[d] = adv.get(d, 0) + 1
-                    elif c < prev_c:
-                        dec[d] = dec.get(d, 0) + 1
-                prev_c = c
+                dates_.append(datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d"))
+                values_.append(c)
+            add_series(dates_, values_)
             ok += 1
+
+    # 2) sparkが使えない場合は実績のある chart API を1銘柄ずつ叩く
     if ok < 100:
-        raise RuntimeError(f"spark fetch: only {ok} symbols available")
+        print(f"touraku(n225): spark gave {ok} symbols, falling back to per-symbol chart API")
+        adv.clear()
+        dec.clear()
+        ok = 0
+        fails = 0
+        for n, sym in enumerate(codes):
+            try:
+                d_, v_ = fetch_yahoo(sym, range_="3mo")
+                add_series(d_, v_)
+                ok += 1
+            except Exception:  # noqa: BLE001
+                fails += 1
+                if fails > 60:
+                    break  # レート制限等で大量失敗している場合は打ち切り
+            if (n + 1) % 50 == 0:
+                print(f"touraku(n225): {n + 1}/{len(codes)} fetched (ok={ok})")
+    if ok < 100:
+        raise RuntimeError(f"only {ok} symbols available")
     dates = sorted(set(adv) | set(dec))
     # 集計銘柄が極端に少ない日(半日立会など)は除外
     dates = [d for d in dates if adv.get(d, 0) + dec.get(d, 0) >= ok * 0.5]
