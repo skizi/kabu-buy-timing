@@ -32,13 +32,15 @@
 
 ドル円は円建てオルカンへの影響が大きいため**参考表示**しています(スコア対象外)。
 
-## セットアップ(初回のみ)
+## セットアップ(初回のみ・1ステップ)
 
-1. リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にする
-   (ワークフローが自動で有効化を試みますが、失敗する場合はここを手動設定)
-2. **Actions** タブから **Update data & deploy** を `Run workflow` で1回手動実行する
-   → 実データの取得と Pages への初回デプロイが行われます
-3. 以後は毎日自動更新されます
+リポジトリの **[Settings → Pages](../../settings/pages)** で以下を設定して Save:
+
+- **Build and deployment → Source**: `Deploy from a branch`
+- **Branch**: `gh-pages` / `(root)`
+
+1〜2分後に `https://<ユーザー名>.github.io/kabu-buy-timing/` で公開されます。
+以後はワークフローが `gh-pages` ブランチを自動更新するため、追加の操作は不要です。
 
 ## 構成
 
