@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>買い増しタイミング判定 | 日経平均・オルカン</title>
+<meta name="description" content="VIX・プットコールレシオ・Fear&Greed指数などから日経平均とオルカン(ACWI)の押し目買いタイミングを判定するダッシュボード">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📉</text></svg>">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="site-header">
+    <div>
+      <h1>買い増しタイミング判定</h1>
+      <p class="subtitle">日経平均・オルカン(ACWI)の押し目を、恐怖指標×価格指標で毎日チェック</p>
+    </div>
+    <div class="updated" id="updated-at">読み込み中…</div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <!-- 総合シグナル -->
+  <section aria-labelledby="signals-h">
+    <h2 id="signals-h">今日の判定</h2>
+    <div class="signal-grid" id="signal-cards"></div>
+  </section>
+
+  <!-- 市場全体の恐怖指標 -->
+  <section aria-labelledby="market-h">
+    <h2 id="market-h">市場全体の恐怖指標</h2>
+    <p class="section-note">相場全体の「怖がり度」を測る指標。恐怖が強いときほど、長期投資家にとっては仕込み場になりやすい。</p>
+    <div class="card-grid" id="market-cards"></div>
+  </section>
+
+  <!-- 資産別の詳細 -->
+  <section aria-labelledby="assets-h">
+    <h2 id="assets-h">資産別の価格指標</h2>
+    <div id="asset-details"></div>
+  </section>
+
+  <!-- 判定基準 -->
+  <section aria-labelledby="criteria-h">
+    <h2 id="criteria-h">判定基準(スコアの内訳)</h2>
+    <p class="section-note">6つの指標を0〜100点で合算。<b>市場全体の恐怖(50点)+その資産の押し目の深さ(50点)</b>という構成です。</p>
+    <div class="criteria-levels">
+      <div class="level-chip lv1"><span class="dot"></span>0–19点:通常の積立のみ</div>
+      <div class="level-chip lv2"><span class="dot"></span>20–39点:調整の兆し・注視</div>
+      <div class="level-chip lv3"><span class="dot"></span>40–64点:買い増し検討</div>
+      <div class="level-chip lv4"><span class="dot"></span>65–100点:絶好の買い増しチャンス</div>
+    </div>
+    <div class="table-scroll">
+      <table class="criteria-table" id="criteria-table">
+        <thead><tr><th>指標</th><th>区分</th><th>配点</th><th>点数の付き方</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <p>データソース:Yahoo Finance(^N225 / ACWI / ^VIX / USDJPY)、CNN Fear &amp; Greed Index(プットコールレシオ含む)。1日1〜2回自動更新。</p>
+    <p>⚠️ 本ページは投資助言ではなく、公開データに基づく参考情報です。投資判断はご自身の責任で行ってください。指標が「買い」を示しても更に下落することは普通にあります。買い増しは一括ではなく分割が基本です。</p>
+  </footer>
+
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>
