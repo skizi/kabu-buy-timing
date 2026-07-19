@@ -35,8 +35,10 @@ CNN_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
 HISTORY_DAYS = 260  # チャート表示用に保持する日数(約1年の営業日)
 
 
-def http_get_json(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+def http_get_json(url, headers=None):
+    h = {"User-Agent": UA, "Accept": "application/json"}
+    h.update(headers or {})
+    req = urllib.request.Request(url, headers=h)
     with urllib.request.urlopen(req, timeout=30) as res:
         return json.loads(res.read().decode("utf-8"))
 
@@ -74,7 +76,16 @@ def fetch_yahoo(symbol, range_="2y", interval="1d"):
 
 
 def fetch_cnn():
-    return http_get_json(CNN_URL)
+    # CNN はボット対策で 418 を返すことがあるため、ブラウザ相当のヘッダーを付ける
+    return http_get_json(CNN_URL, headers={
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,ja;q=0.8",
+        "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+        "Origin": "https://edition.cnn.com",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "cross-site",
+    })
 
 
 # ---------- 指標計算 ----------
