@@ -305,7 +305,12 @@
     // 騰落レシオ(25日)
     const tr = data.market?.touraku;
     if (tr) {
-      const el = card("騰落レシオ(25日・東証)", "値上がり銘柄数÷値下がり銘柄数(25日合計)。低いほど売られすぎ。日経平均のスコアに使用");
+      const isTse = tr.source !== "n225";
+      const el = card(
+        "騰落レシオ(25日)" + (isTse ? "・東証" : "・日経225ベース"),
+        "値上がり銘柄数÷値下がり銘柄数(25日合計)。低いほど売られすぎ。日経平均のスコアに使用" +
+          (isTse ? "" : "。※東証公式値が取得できないため日経225構成銘柄から算出した近似値")
+      );
       const zone = tr.value < 60 ? ["歴史的底値圏", "lv4-text"] : tr.value < 70 ? ["売られすぎ", "lv3-text"] : tr.value < 85 ? ["やや弱気", "lv2-text"] : tr.value > 120 ? ["過熱気味", "lv1-text"] : ["平常", "lv1-text"];
       const big = document.createElement("div");
       big.className = "big";

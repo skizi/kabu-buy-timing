@@ -112,7 +112,89 @@ def fetch_nikkei_vi():
     return fetch_yahoo("^NKVI")
 
 
-def fetch_touraku():
+# 日経225構成銘柄(2026年時点の主要構成。多少の入れ替わりで数銘柄欠けても
+# 騰落レシオの近似計算には影響しない。取得失敗銘柄はスキップされる)
+N225_CODES = (
+    "1332 1605 1721 1801 1802 1803 1808 1812 1925 1928 1963 "
+    "2002 2269 2282 2413 2432 2501 2502 2503 2768 2801 2802 2871 2914 "
+    "3086 3092 3099 3289 3382 3401 3402 3405 3407 3659 3861 "
+    "4004 4005 4021 4042 4043 4061 4062 4063 4151 4183 4188 4208 4307 4324 4385 "
+    "4452 4502 4503 4506 4507 4519 4523 4543 4568 4578 4661 4689 4704 4751 4755 "
+    "4901 4902 4911 5019 5020 5101 5108 5201 5214 5233 5301 5332 5333 "
+    "5401 5406 5411 5631 5706 5711 5713 5714 5801 5802 5803 5831 "
+    "6098 6103 6113 6146 6178 6273 6301 6302 6305 6326 6361 6367 6471 6472 6473 "
+    "6501 6503 6504 6506 6526 6645 6674 6701 6702 6723 6724 6752 6753 6758 6762 "
+    "6770 6841 6857 6861 6902 6920 6952 6954 6963 6965 6971 6976 6981 6988 "
+    "7004 7011 7012 7013 7186 7201 7202 7203 7205 7211 7261 7267 7269 7270 7272 "
+    "7453 7731 7733 7735 7741 7751 7752 7762 7832 7911 7912 7951 7974 "
+    "8001 8002 8015 8031 8035 8053 8058 8233 8252 8253 8267 8304 8306 8308 8309 "
+    "8316 8331 8354 8411 8591 8601 8604 8630 8697 8725 8750 8766 8795 "
+    "8801 8802 8804 8830 9001 9005 9007 9008 9009 9020 9021 9022 9064 9101 9104 "
+    "9107 9147 9201 9202 9301 9432 9433 9434 9501 9502 9503 9531 9532 "
+    "9602 9613 9735 9766 9843 9983 9984"
+).split()
+
+
+def compute_touraku_n225():
+    """日経225構成銘柄の日次騰落を集計して25日騰落レシオの近似値を計算する。
+    (東証プライム全銘柄の公式値の代替。傾向はほぼ一致する)"""
+    adv, dec = {}, {}
+    ok = 0
+    codes = [c + ".T" for c in N225_CODES]
+    for i in range(0, len(codes), 20):
+        chunk = ",".join(codes[i:i + 20])
+        data = None
+        for host in YAHOO_HOSTS:
+            try:
+                data = http_get_json(
+                    f"https://{host}/v8/finance/spark?symbols={urllib.parse.quote(chunk)}"
+                    f"&range=3mo&interval=1d"
+                )
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        if data is None:
+            continue
+        for r in data.get("spark", {}).get("result", []):
+            try:
+                resp = r["response"][0]
+                ts = resp["timestamp"]
+                closes = resp["indicators"]["quote"][0]["close"]
+            except Exception:  # noqa: BLE001
+                continue
+            prev_c = None
+            for t, c in zip(ts, closes):
+                if c is None:
+                    continue
+                d = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
+                if prev_c is not None:
+                    if c > prev_c:
+                        adv[d] = adv.get(d, 0) + 1
+                    elif c < prev_c:
+                        dec[d] = dec.get(d, 0) + 1
+                prev_c = c
+            ok += 1
+    if ok < 100:
+        raise RuntimeError(f"spark fetch: only {ok} symbols available")
+    dates = sorted(set(adv) | set(dec))
+    # 集計銘柄が極端に少ない日(半日立会など)は除外
+    dates = [d for d in dates if adv.get(d, 0) + dec.get(d, 0) >= ok * 0.5]
+    out_dates, vals = [], []
+    for i in range(24, len(dates)):
+        win = dates[i - 24:i + 1]
+        a = sum(adv.get(d, 0) for d in win)
+        de = sum(dec.get(d, 0) for d in win)
+        if de == 0:
+            continue
+        out_dates.append(dates[i])
+        vals.append(a / de * 100.0)
+    if len(vals) < 5:
+        raise RuntimeError("insufficient computed touraku data")
+    print(f"touraku(n225): computed from {ok} symbols, {len(vals)} days, last={vals[-1]:.1f}")
+    return out_dates, vals
+
+
+def fetch_touraku_scrape():
     """東証の25日騰落レシオを (dates, values) で返す(日付昇順)。
     nikkei225jp.com の一覧テーブルをヘッダー行から列位置を特定してパースする。"""
     last_err = None
@@ -178,7 +260,28 @@ def fetch_touraku():
             return dates, [pairs[d] for d in dates]
         except Exception as e:  # noqa: BLE001
             last_err = e
-    raise RuntimeError(f"touraku fetch failed: {last_err}")
+    raise RuntimeError(f"touraku scrape failed: {last_err}")
+
+
+def fetch_touraku():
+    """騰落レシオ(25日)。東証公式値のスクレイプ → 日経225構成銘柄からの
+    自前計算の順に試す。(dates, values, source) を返す。"""
+    try:
+        d, v = fetch_touraku_scrape()
+        return d, v, "tse"
+    except Exception as scrape_err:  # noqa: BLE001
+        try:
+            d, v = compute_touraku_n225()
+            return d, v, "n225"
+        except Exception as calc_err:  # noqa: BLE001
+            raise RuntimeError(f"scrape: {scrape_err} / n225: {calc_err}")
+
+
+def merge_history(prev_hist, new_hist, n=HISTORY_DAYS):
+    """日付をキーに履歴をマージ(自前計算の短い履歴を日々積み上げるため)。"""
+    m = {p["d"]: p["v"] for p in (prev_hist or []) if isinstance(p, dict)}
+    m.update({p["d"]: p["v"] for p in new_hist})
+    return [{"d": d, "v": m[d]} for d in sorted(m)[-n:]]
 
 
 def fetch_cnn():
@@ -613,6 +716,7 @@ def main():
         }
         market["touraku"] = {
             "value": round(s["touraku"][-1], 1),
+            "source": "tse",
             "history": hist(dates, s["touraku"]),
         }
         market["usdjpy"] = {"value": round(s["usdjpy"][-1], 2), "history": hist(dates, s["usdjpy"])}
@@ -648,10 +752,14 @@ def main():
 
         # 東証の騰落レシオ(25日)
         try:
-            d, v = fetch_touraku()
+            d, v, src = fetch_touraku()
+            prev_tr = prev.get("market", {}).get("touraku") or {}
+            # ソースが同じ場合のみ履歴をマージ(公式値と近似値の混在を避ける)
+            prev_hist = prev_tr.get("history") if prev_tr.get("source") == src else None
             market["touraku"] = {
                 "value": round(v[-1], 1),
-                "history": hist(d, v),
+                "source": src,
+                "history": merge_history(prev_hist, hist(d, v)),
             }
         except Exception as e:  # noqa: BLE001
             errors.append(f"Touraku: {e}")
