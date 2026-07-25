@@ -2,6 +2,10 @@ name: Backtest score validation
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - scripts/backtest.py
+      - .github/workflows/backtest.yml
 
 permissions:
   contents: read
