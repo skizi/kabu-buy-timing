@@ -15,7 +15,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fetch_data import VOL_NKVI, VOL_VIX, band, fetch_nikkei_vi, fetch_yahoo  # noqa: E402
+from fetch_data import (  # noqa: E402
+    VOL_NKVI, VOL_VIX, band, fetch_nikkei_vi, fetch_yahoo, to_yen_series,
+)
 
 
 # ---------- 系列計算(本番 build_asset と同じ定義をローリングで計算) ----------
@@ -219,7 +221,13 @@ def main():
     run_asset("日経平均", n225_d, n225_v, s, dd, 70)
 
     s, dd = build_scores(acwi_d, acwi_v)
-    run_asset("オルカン(ACWI)", acwi_d, acwi_v, s, dd, 70)
+    run_asset("オルカン(ACWI・ドル建て/参考)", acwi_d, acwi_v, s, dd, 70)
+
+    # 本番仕様: 円建て換算値で価格指標を計算
+    fx_d, fx_v = fetch_yahoo("JPY=X", range_="10y")
+    yen_d, yen_v = to_yen_series(acwi_d, acwi_v, fx_d, fx_v)
+    s, dd = build_scores(yen_d, yen_v)
+    run_asset("オルカン(ACWI・円建て=本番仕様)", yen_d, yen_v, s, dd, 70)
 
     s, dd = build_scores(gold_d, gold_v, gold=True)
     run_asset("金(GLD)", gold_d, gold_v, s, dd, 100)

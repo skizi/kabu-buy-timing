@@ -239,7 +239,9 @@
       card.innerHTML = `
         <div class="signal-head">
           <div class="signal-asset">${asset.name}</div>
-          <div class="signal-price">${fmt(asset.price)} ${asset.currency === "JPY" ? "円" : "ドル"}<span style="color:var(--text-muted)"> (${asset.date})</span></div>
+          <div class="signal-price">${asset.usd_price != null
+            ? `円換算 ${fmt(asset.price, 0)}円(${fmt(asset.usd_price)}ドル)`
+            : `${fmt(asset.price)} ${asset.currency === "JPY" ? "円" : "ドル"}`}<span style="color:var(--text-muted)"> (${asset.date})</span></div>
         </div>
         <div class="signal-main"></div>
         <p class="signal-action">${sig.action}</p>
@@ -443,7 +445,7 @@
     // USD/JPY(参考)
     const uj = data.market?.usdjpy;
     if (uj) {
-      const el = card("ドル円(参考・スコア対象外)", "オルカン・金(ドル建て)の円建て評価額に効く為替レート");
+      const el = card("ドル円", "オルカンの円建て換算(=スコアの価格指標)に使用。金はドル建てのまま判定");
       const big = document.createElement("div");
       big.className = "big";
       big.innerHTML = `${fmt(uj.value)}<span style="font-size:0.9rem;color:var(--text-muted)">円/ドル</span>`;
@@ -451,7 +453,7 @@
       if (uj.history?.length) lineChart(el, [{ data: uj.history, area: true }], { label: "ドル円の推移", digits: 1 });
       const d = document.createElement("p");
       d.className = "desc";
-      d.textContent = "株安と円高が同時に来ると、円建てオルカンは指数以上に下がります。逆にその局面は円ベースでの仕込み効率が良い局面でもあります。";
+      d.textContent = "オルカンのスコアは円建て換算値(ACWI×ドル円)で計算しています。株安と円高が重なって円建てで深く下がるほどスコアが上がり、円安がクッションになっている間は上がりにくくなります。";
       el.appendChild(d);
     }
   }
@@ -468,7 +470,8 @@
       block.innerHTML = `
         <h3>${a.name}</h3>
         <div class="asset-stats">
-          <div class="stat"><div class="k">終値 (${a.date})</div><div class="v">${fmt(a.price)} ${unit}</div></div>
+          <div class="stat"><div class="k">${a.usd_price != null ? "円換算値" : "終値"} (${a.date})</div><div class="v">${fmt(a.price, a.usd_price != null ? 0 : 2)} ${unit}</div></div>
+          ${a.usd_price != null ? `<div class="stat"><div class="k">ドル建て終値</div><div class="v">${fmt(a.usd_price)} ドル</div></div>` : ""}
           <div class="stat"><div class="k">52週高値からの下落</div><div class="v ${a.drawdown_pct < -5 ? "neg" : ""}">${fmt(a.drawdown_pct, 1)}%</div></div>
           <div class="stat"><div class="k">RSI(14日)</div><div class="v">${fmt(a.rsi14, 1)}</div></div>
           <div class="stat"><div class="k">200日線との乖離</div><div class="v ${a.ma200_dev_pct < 0 ? "neg" : ""}">${a.ma200_dev_pct > 0 ? "+" : ""}${fmt(a.ma200_dev_pct, 1)}%</div></div>
@@ -504,7 +507,7 @@
       }
     }
     addScheme(data.signals?.n225, "日経平均(日経VI 20点+騰落レシオ30点+価格指標50点)");
-    addScheme(data.signals?.acwi, "オルカン(VIX+恐怖指標で50点+価格指標50点)");
+    addScheme(data.signals?.acwi, "オルカン(VIX+恐怖指標で50点+円建て価格指標50点)");
     addScheme(data.signals?.gold, "金(ゴールド)— 恐怖局面で上がりやすい資産のため、価格指標のみで100点");
   }
 })();

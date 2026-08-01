@@ -381,6 +381,21 @@ def hist(dates, values, n=HISTORY_DAYS):
     ]
 
 
+def to_yen_series(dates, values, fx_dates, fx_values):
+    """ドル建て系列を円建てに換算する(為替は直近既知の値でフォワードフィル)。"""
+    out_dates, out_values = [], []
+    j = 0
+    last_fx = None
+    for d, v in zip(dates, values):
+        while j < len(fx_dates) and fx_dates[j] <= d:
+            last_fx = fx_values[j]
+            j += 1
+        if last_fx is not None:
+            out_dates.append(d)
+            out_values.append(v * last_fx)
+    return out_dates, out_values
+
+
 def build_asset(name, currency, dates, closes):
     last = closes[-1]
     win52 = closes[-252:] if len(closes) >= 252 else closes
@@ -749,7 +764,9 @@ def main():
         }
         market["usdjpy"] = {"value": round(s["usdjpy"][-1], 2), "history": hist(dates, s["usdjpy"])}
         assets["n225"] = build_asset("日経平均株価", "JPY", dates, s["n225"])
-        assets["acwi"] = build_asset("オルカン(ACWI)", "USD", dates, s["acwi"])
+        yen = [a * f for a, f in zip(s["acwi"], s["usdjpy"])]
+        assets["acwi"] = build_asset("オルカン(ACWI・円建て)", "JPY", dates, yen)
+        assets["acwi"]["usd_price"] = round(s["acwi"][-1], 2)
         assets["gold"] = build_asset("金(ゴールド/GLD)", "USD", dates, s["gold"])
         sample = True
     else:
@@ -801,10 +818,25 @@ def main():
             errors.append(f"N225: {e}")
             assets["n225"] = prev.get("assets", {}).get("n225")
 
-        # オルカン代替 (iShares MSCI ACWI ETF)
+        # ドル円(参考表示+オルカンの円建て換算に使用)
+        fx = None
+        try:
+            fx = fetch_yahoo("JPY=X")
+            market["usdjpy"] = {"value": round(fx[1][-1], 2), "history": hist(fx[0], fx[1])}
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"USDJPY: {e}")
+            market["usdjpy"] = prev.get("market", {}).get("usdjpy")
+
+        # オルカン代替 (iShares MSCI ACWI ETF)。実際の購入は円建てのため、
+        # 為替が取れている場合は円換算値でスコア用の価格指標を計算する
         try:
             d, v = fetch_yahoo("ACWI")
-            assets["acwi"] = build_asset("オルカン(ACWI)", "USD", d, v)
+            if fx is not None:
+                yd, yv = to_yen_series(d, v, fx[0], fx[1])
+                assets["acwi"] = build_asset("オルカン(ACWI・円建て)", "JPY", yd, yv)
+                assets["acwi"]["usd_price"] = round(v[-1], 2)
+            else:
+                assets["acwi"] = build_asset("オルカン(ACWI)", "USD", d, v)
         except Exception as e:  # noqa: BLE001
             errors.append(f"ACWI: {e}")
             assets["acwi"] = prev.get("assets", {}).get("acwi")
@@ -816,14 +848,6 @@ def main():
         except Exception as e:  # noqa: BLE001
             errors.append(f"GOLD: {e}")
             assets["gold"] = prev.get("assets", {}).get("gold")
-
-        # ドル円(参考表示)
-        try:
-            d, v = fetch_yahoo("JPY=X")
-            market["usdjpy"] = {"value": round(v[-1], 2), "history": hist(d, v)}
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"USDJPY: {e}")
-            market["usdjpy"] = prev.get("market", {}).get("usdjpy")
 
         # CNN Fear & Greed + プットコールレシオ
         try:
